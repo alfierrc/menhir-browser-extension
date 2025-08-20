@@ -57,13 +57,22 @@ function analyzePage() {
   const addToCartButton = document.querySelector(
     '[id*="add-to-cart"], [class*="add-to-cart"], [class*="addtocart"]'
   );
+
   if (priceElement || addToCartButton) {
     type = "product";
     if (priceElement) {
-      const priceMatch = priceElement.innerText
-        .trim()
-        .match(/[\$€£]?\s*(\d+[,.]?\d*)/);
-      if (priceMatch) data.price = priceMatch[1];
+      const priceText = priceElement.innerText.trim();
+
+      // Look for a currency symbol
+      const currencyMatch = priceText.match(/[$€£]/);
+      data.currency = currencyMatch ? currencyMatch[0] : null;
+
+      // Look for numbers, commas, and decimals
+      const amountMatch = priceText.match(/[\d,.]+/);
+      if (amountMatch) {
+        // Remove any commas for clean numbers like 1,200.00 -> 1200.00
+        data.price = amountMatch[0].replace(/,/g, "");
+      }
     }
   }
 

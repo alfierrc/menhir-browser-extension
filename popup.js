@@ -14,7 +14,8 @@ function setupCaptureButton(type, data) {
     )}&source=${encodeURIComponent(data.source)}`;
 
     if (data.price) menhirUrl += `&price=${encodeURIComponent(data.price)}`;
-    // For images, the `image` property is the source itself
+    if (data.currency)
+      menhirUrl += `&currency=${encodeURIComponent(data.currency)}`; // Add this line
     if (data.image) menhirUrl += `&image=${encodeURIComponent(data.image)}`;
 
     window.open(menhirUrl);
