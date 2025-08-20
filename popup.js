@@ -1,20 +1,45 @@
-document.getElementById("captureBtn").addEventListener("click", () => {
-  // Get the currently active tab in the browser
-  chrome.tabs.query({ active: true, currentWindow: true }, (tabs) => {
-    const tab = tabs[0];
+const titleEl = document.getElementById("title");
+const typeEl = document.getElementById("type");
+const captureBtn = document.getElementById("captureBtn");
 
-    // Encode the data to be safely passed in a URL
-    const title = encodeURIComponent(tab.title);
-    const url = encodeURIComponent(tab.url);
+// This function runs the scraper and updates the popup
+async function analyze() {
+  const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
 
-    // Construct the custom protocol URL that your Electron app will handle
-    const menhirUrl = `menhir://capture?title=${title}&url=${url}`;
-
-    // This is the key step: we "open" the link. The operating system
-    // sees the 'menhir://' part and routes it to your running Electron app.
-    window.open(menhirUrl);
-
-    // Close the popup window after the action is sent
-    window.close();
+  // Inject the scraper.js file into the current page
+  const [injectionResult] = await chrome.scripting.executeScript({
+    target: { tabId: tab.id },
+    files: ["scraper.js"],
   });
+}
+
+// Listen for the message from our scraper.js script
+chrome.runtime.onMessage.addListener((message) => {
+  const { type, data } = message.payload;
+
+  // Update the popup's UI with the detected information
+  titleEl.textContent = data.title;
+  typeEl.textContent = type.charAt(0).toUpperCase() + type.slice(1); // Capitalize type
+  captureBtn.disabled = false;
+
+  // Set up the capture button to send the detailed data
+  captureBtn.onclick = () => {
+    let menhirUrl = `menhir://capture?type=${type}&title=${encodeURIComponent(
+      data.title
+    )}&source=${encodeURIComponent(data.source)}`;
+
+    if (data.price) {
+      menhirUrl += `&price=${encodeURIComponent(data.price)}`;
+    }
+    // For webpages and products, we also send a potential cover image URL
+    if (type !== "image" && data.image) {
+      menhirUrl += `&image=${encodeURIComponent(data.image)}`;
+    }
+
+    window.open(menhirUrl);
+    window.close();
+  };
 });
+
+// Run the analysis as soon as the popup opens
+analyze();
