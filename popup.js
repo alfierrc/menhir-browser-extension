@@ -98,6 +98,7 @@ async function initialize() {
     target: { tabId: tab.id },
     files: ["scraper.js"],
   });
+  analyze();
 }
 
 // Run the function when the popup opens
