@@ -62,11 +62,43 @@ async function analyze() {
 // Inject the script and then run the analysis
 async function initialize() {
   const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
+  const url = tab.url;
+
+  // --- NEW: Check for direct image URL first ---
+  if (url.match(/\.(jpeg|jpg|gif|png|webp)(\?.*)?$/i)) {
+    console.log("Direct image URL detected.");
+
+    // 1. Clean the URL by removing everything after the first '?'
+    const cleanUrl = url.split("?")[0];
+
+    // 2. Get the filename from the *clean* URL
+    const filename = cleanUrl.substring(cleanUrl.lastIndexOf("/") + 1);
+
+    const data = {
+      title: filename,
+      source: url, // Keep the original URL for reference
+      image: cleanUrl, // Use the clean URL for downloading
+    };
+    setupCaptureButton("image", data);
+    return; // Stop here, no need to scrape
+  }
+
+  // --- Fallback to scraping for regular HTML pages ---
+  console.log("HTML page detected, injecting scraper.");
+
+  const listener = (message) => {
+    if (message.payload) {
+      setupCaptureButton(message.payload.type, message.payload.data);
+      chrome.runtime.onMessage.removeListener(listener);
+    }
+  };
+  chrome.runtime.onMessage.addListener(listener);
+
   await chrome.scripting.executeScript({
     target: { tabId: tab.id },
     files: ["scraper.js"],
   });
-  analyze();
 }
 
+// Run the function when the popup opens
 initialize();
