@@ -49,6 +49,9 @@ async function analyze() {
     )}&source=${encodeURIComponent(data.source)}`;
 
     if (data.price) menhirUrl += `&price=${encodeURIComponent(data.price)}`;
+    if (data.currency)
+      menhirUrl += `&currency=${encodeURIComponent(data.currency)}`;
+    if (data.vendor) menhirUrl += `&vendor=${encodeURIComponent(data.vendor)}`; // Add this line
     if (data.image) menhirUrl += `&image=${encodeURIComponent(data.image)}`;
 
     window.open(menhirUrl);
