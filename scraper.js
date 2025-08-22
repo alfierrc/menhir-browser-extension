@@ -1,12 +1,21 @@
+// This function will be injected into the active webpage
 function analyzePage() {
   let type = "webpage";
   let data = {};
-  let productFoundByJson = false;
+  let productFound = false;
 
+  // --- HELPER FUNCTIONS ---
+  // Cleans image URLs by removing query parameters
   function cleanImageUrl(url) {
     if (!url) return "";
-    // Removes query parameters like ?v=... or &width=...
     return url.split("?")[0];
+  }
+
+  // Gets content from a meta tag by property or name
+  function getMeta(selector) {
+    return document.querySelector(
+      `meta[property="${selector}"], meta[name="${selector}"]`
+    )?.content;
   }
 
   // --- STRATEGY 1: Look for JSON-LD Structured Data (Most Reliable) ---
@@ -25,12 +34,9 @@ function analyzePage() {
 
       if (productNode) {
         type = "product";
-        data.title = productNode.name || data.title;
-        const imageUrl = productNode.image?.url || productNode.image;
-        data.image = cleanImageUrl(imageUrl); // Clean the URL
-
+        data.title = productNode.name;
+        data.image = cleanImageUrl(productNode.image?.url || productNode.image);
         if (productNode.brand) data.vendor = productNode.brand.name;
-
         if (productNode.offers) {
           const offer = Array.isArray(productNode.offers)
             ? productNode.offers[0]
@@ -38,43 +44,45 @@ function analyzePage() {
           data.price = offer.price;
           data.currency = offer.priceCurrency;
         }
-        productFoundByJson = true;
-        break; // Stop after finding the first valid product
+        productFound = true;
+        break;
       }
     } catch (e) {
-      /* Ignore JSON parsing errors */
+      /* Ignore parsing errors */
     }
   }
 
-  // --- STRATEGY 2: Fallback to DOM Scraping if JSON-LD fails ---
-  if (!productFoundByJson) {
+  // --- STRATEGY 2: Fallback to Open Graph Meta Tags ---
+  if (!productFound) {
+    const ogType = getMeta("og:type");
+    const productPriceAmount = getMeta("product:price:amount");
+    if (ogType === "product" && productPriceAmount) {
+      type = "product";
+      data.title = getMeta("og:title");
+      data.price = productPriceAmount;
+      data.currency = getMeta("product:price:currency");
+      data.image = cleanImageUrl(getMeta("og:image"));
+      data.vendor = getMeta("og:site_name");
+      productFound = true;
+    }
+  }
+
+  // --- STRATEGY 3: Fallback to DOM Scraping ---
+  if (!productFound) {
     const priceElement = document.querySelector(
       '[data-test-id*="Price"], [itemprop="price"], .price, #price, [class*="price"]'
     );
-    const addToCartButton = document.querySelector(
-      '[data-test-id*="AddToCart"], [id*="add-to-cart"], [class*="add-to-cart"]'
-    );
-
-    if (priceElement || addToCartButton) {
+    if (priceElement) {
       type = "product";
-      if (priceElement) {
-        const priceText = priceElement.innerText.trim();
-        const currencyMatch = priceText.match(/[$€£]/);
-        data.currency = currencyMatch ? currencyMatch[0] : null;
-
-        const amountMatch = priceText.match(/[\d,.]+/);
-        if (amountMatch) {
-          data.price = amountMatch[0].replace(/,/g, "");
-        }
-      }
-      const titleElement = document.querySelector("h1");
-      if (titleElement && titleElement.children.length > 1) {
-        data.vendor = titleElement.children[0]?.innerText.trim();
-      }
+      const priceText = priceElement.innerText.trim();
+      const currencyMatch = priceText.match(/[$€£]/);
+      data.currency = currencyMatch ? currencyMatch[0] : null;
+      const amountMatch = priceText.match(/[\d,.]+/);
+      if (amountMatch) data.price = amountMatch[0].replace(/,/g, "");
     }
   }
 
-  // --- Image Page Detection (run this check regardless of product status) ---
+  // --- Image Page Detection ---
   if (
     window.location.href.match(/\.(jpeg|jpg|gif|png|webp)(\?.*)?$/i) ||
     (document.images.length === 1 && document.body.childElementCount <= 2)
@@ -82,18 +90,9 @@ function analyzePage() {
     type = "image";
   }
 
-  // --- General Data Extraction & Final Image Fallback ---
-  const findBestImage = () => {
-    const isValidUrl = (str) =>
-      str && (str.startsWith("http") || str.startsWith("/"));
-    const ogImage = document.querySelector('meta[property="og:image"]');
-    if (ogImage && isValidUrl(ogImage.content)) return ogImage.content;
-    const twitterImage = document.querySelector('meta[name="twitter:image"]');
-    if (twitterImage && isValidUrl(twitterImage.content))
-      return twitterImage.content;
-    const schemaImage = document.querySelector('[itemprop="image"]');
-    if (schemaImage && isValidUrl(schemaImage.src)) return schemaImage.src;
-
+  // --- Final Data Cleanup and Image Fallback ---
+  if (!data.title) data.title = getMeta("og:title") || document.title;
+  if (!data.image) {
     let largestImage = null;
     let maxArea = 0;
     const images = document.querySelectorAll(
@@ -108,22 +107,14 @@ function analyzePage() {
         }
       }
     }
-    if (largestImage && isValidUrl(largestImage.src)) return largestImage.src;
-    return "";
-  };
-
-  // Fill in any missing data
-  if (!data.title)
-    data.title =
-      document.querySelector('meta[property="og:title"]')?.content ||
-      document.title;
-  if (!data.image) data.image = findBestImage();
+    if (largestImage) data.image = cleanImageUrl(largestImage.src);
+  }
   data.source = window.location.href;
 
   return { type, data };
 }
 
-// When the script is executed, it sends the analysis back to the extension's popup
+// --- Message Listener ---
 chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   if (message.action === "analyzePage") {
     sendResponse(analyzePage());
