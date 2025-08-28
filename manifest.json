@@ -3,7 +3,7 @@
   "name": "Menhir Capture",
   "version": "0.1.0",
   "description": "Captures web content and sends it to the Menhir app.",
-  "permissions": ["activeTab", "scripting"],
+  "permissions": ["activeTab", "scripting", "debugger"],
   "host_permissions": ["<all_urls>", "http://localhost:*/"],
   "action": {
     "default_popup": "popup.html",

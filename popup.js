@@ -2,6 +2,71 @@ const titleEl = document.getElementById("title");
 const typeEl = document.getElementById("type");
 const captureBtn = document.getElementById("captureBtn");
 
+async function injectScript(tabId, func, args = []) {
+  const result = await chrome.scripting.executeScript({
+    target: { tabId },
+    func,
+    args,
+  });
+  return result[0].result;
+}
+
+async function captureFullPage(tabId) {
+  // 1. Get the necessary dimensions from the page
+  const pageDetails = await injectScript(tabId, () => ({
+    totalHeight: document.body.scrollHeight,
+    viewportHeight: window.innerHeight,
+    viewportWidth: window.innerWidth,
+  }));
+
+  const { totalHeight, viewportHeight, viewportWidth } = pageDetails;
+  let capturedHeight = 0;
+  const screenshots = [];
+
+  // 2. Scroll and capture in a loop
+  while (capturedHeight < totalHeight) {
+    // Ensure the page is scrolled to the correct position
+    await injectScript(tabId, (y) => window.scrollTo(0, y), [capturedHeight]);
+
+    // Allow a brief moment for the page to render after scrolling
+    await new Promise((resolve) => setTimeout(resolve, 200));
+
+    // Capture the visible part of the tab
+    const dataUrl = await chrome.tabs.captureVisibleTab(null, {
+      format: "jpeg",
+      quality: 90,
+    });
+    screenshots.push(dataUrl);
+
+    capturedHeight += viewportHeight;
+  }
+
+  // 3. Stitch the images together using a canvas
+  return new Promise((resolve) => {
+    const canvas = document.createElement("canvas");
+    canvas.width = viewportWidth;
+    canvas.height = totalHeight;
+    const ctx = canvas.getContext("2d");
+
+    let y = 0;
+    const stitchImage = (index) => {
+      if (index >= screenshots.length) {
+        // When all images are drawn, export the canvas
+        resolve(canvas.toDataURL("image/jpeg", 0.9));
+        return;
+      }
+      const img = new Image();
+      img.onload = () => {
+        ctx.drawImage(img, 0, y);
+        y += img.height;
+        stitchImage(index + 1);
+      };
+      img.src = screenshots[index];
+    };
+    stitchImage(0);
+  });
+}
+
 // This function now takes the analysis result and sets up the button
 function setupCaptureButton(type, data) {
   titleEl.textContent = data.title;
@@ -44,55 +109,55 @@ async function analyze() {
   captureBtn.disabled = false;
 
   captureBtn.onclick = async () => {
-    // If it's a webpage, take a screenshot
-    if (type === "webpage") {
-      const screenshotDataUrl = await chrome.tabs.captureVisibleTab(null, {
-        format: "jpeg",
-        quality: 85,
-      });
+    const [tab] = await chrome.tabs.query({
+      active: true,
+      currentWindow: true,
+    });
+    let screenshotDataUrl;
+
+    try {
+      if (type === "webpage") {
+        // Use our new full-page capture method
+        screenshotDataUrl = await captureFullPage(tab.id);
+      } else {
+        // Fallback to the visible tab for other types
+        screenshotDataUrl = await chrome.tabs.captureVisibleTab(null, {
+          format: "jpeg",
+          quality: 85,
+        });
+      }
 
       const screenshotId = Date.now().toString();
 
       // Send the screenshot to the local server in the main app
-      try {
-        await fetch("http://localhost:28080/capture-screenshot", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
-            screenshotId: screenshotId,
-            data: screenshotDataUrl,
-          }),
-        });
-      } catch (e) {
-        console.error("Failed to send screenshot to Menhir app.", e);
-        titleEl.textContent = "Error: Is the Menhir app running?";
-        return;
-      }
+      await fetch("http://localhost:28080/capture-screenshot", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          screenshotId: screenshotId,
+          data: screenshotDataUrl,
+        }),
+      });
 
       // Trigger the capture in the main app, referencing the screenshotId
-      const menhirUrl = `menhir://capture?type=webpage&title=${encodeURIComponent(
+      const menhirUrl = `menhir://capture?type=${type}&title=${encodeURIComponent(
         data.title
       )}&source=${encodeURIComponent(
         data.source
       )}&screenshotId=${screenshotId}`;
-
-      window.open(menhirUrl);
-      window.close();
-    } else {
-      // For all other types (product, image), use the old logic
-      let menhirUrl = `menhir://capture?type=${type}&title=${encodeURIComponent(
-        data.title
-      )}&source=${encodeURIComponent(data.source)}`;
 
       if (data.price) menhirUrl += `&price=${encodeURIComponent(data.price)}`;
       if (data.currency)
         menhirUrl += `&currency=${encodeURIComponent(data.currency)}`;
       if (data.vendor)
         menhirUrl += `&vendor=${encodeURIComponent(data.vendor)}`;
-      if (data.image) menhirUrl += `&image=${encodeURIComponent(data.image)}`;
 
       window.open(menhirUrl);
       window.close();
+    } catch (e) {
+      console.error("Failed to send screenshot to Menhir app.", e);
+      titleEl.textContent = "Error: Is the Menhir app running?";
+      return;
     }
   };
 }
