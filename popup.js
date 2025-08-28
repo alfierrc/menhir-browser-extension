@@ -12,7 +12,6 @@ async function injectScript(tabId, func, args = []) {
 }
 
 async function captureFullPage(tabId) {
-  // This script changes fixed/sticky elements to absolute
   const unfixElementsScript = () => {
     document.querySelectorAll("*").forEach((el) => {
       const style = window.getComputedStyle(el);
@@ -22,20 +21,17 @@ async function captureFullPage(tabId) {
     });
   };
 
-  // This CSS just hides the scrollbar
   const hideScrollbarCSS =
     "body::-webkit-scrollbar { display: none !important; }";
 
   try {
-    // 1. Apply our temporary styles
     await chrome.scripting.insertCSS({
       target: { tabId },
       css: hideScrollbarCSS,
     });
     await injectScript(tabId, unfixElementsScript);
-    await new Promise((resolve) => setTimeout(resolve, 200)); // Wait for styles to apply
+    await new Promise((resolve) => setTimeout(resolve, 100));
 
-    // 2. Get page dimensions
     const pageDetails = await injectScript(tabId, () => ({
       totalHeight: document.body.scrollHeight,
       viewportHeight: window.innerHeight,
@@ -45,48 +41,85 @@ async function captureFullPage(tabId) {
     const { totalHeight, viewportHeight, viewportWidth } = pageDetails;
     let capturedHeight = 0;
     const screenshots = [];
+    let isDone = false;
 
-    // 3. Scroll and capture loop
-    while (capturedHeight < totalHeight) {
+    while (!isDone) {
+      let nextScrollY = capturedHeight + viewportHeight;
+
+      // --- This is the new logic ---
+      // If the next scroll would go past the end, adjust it to the final position
+      if (nextScrollY >= totalHeight) {
+        nextScrollY = totalHeight - viewportHeight;
+        isDone = true;
+      }
+
       await injectScript(tabId, (y) => window.scrollTo(0, y), [capturedHeight]);
       await new Promise((resolve) => setTimeout(resolve, 200));
+
       const dataUrl = await chrome.tabs.captureVisibleTab(null, {
         format: "jpeg",
         quality: 90,
       });
-      screenshots.push(dataUrl);
-      capturedHeight += viewportHeight;
+      screenshots.push({ dataUrl, y: capturedHeight });
+
+      capturedHeight = nextScrollY;
+      if (isDone) {
+        // One final capture at the very bottom
+        await injectScript(tabId, (y) => window.scrollTo(0, y), [totalHeight]);
+        await new Promise((resolve) => setTimeout(resolve, 100));
+        const finalDataUrl = await chrome.tabs.captureVisibleTab(null, {
+          format: "jpeg",
+          quality: 90,
+        });
+        screenshots.push({
+          dataUrl: finalDataUrl,
+          y: totalHeight - viewportHeight,
+          isFinal: true,
+        });
+      }
     }
 
-    // 4. Stitch the images together
+    // Stitch the images together
     return new Promise((resolve) => {
       const canvas = document.createElement("canvas");
       canvas.width = viewportWidth;
       canvas.height = totalHeight;
       const ctx = canvas.getContext("2d");
-      let y = 0;
-      const stitchImage = (index) => {
-        if (index >= screenshots.length) {
-          const finalCanvas = document.createElement("canvas");
-          finalCanvas.width = viewportWidth;
-          finalCanvas.height = totalHeight;
-          const finalCtx = finalCanvas.getContext("2d");
-          finalCtx.drawImage(canvas, 0, 0);
-          resolve(finalCanvas.toDataURL("image/jpeg", 0.9));
-          return;
-        }
+
+      let drawnCount = 0;
+      screenshots.forEach(({ dataUrl, y, isFinal }) => {
         const img = new Image();
         img.onload = () => {
-          ctx.drawImage(img, 0, y);
-          y += img.height;
-          stitchImage(index + 1);
+          let cropSourceY = 0;
+          let cropHeight = img.height;
+
+          // If this is the last image, crop it to only include the very bottom part
+          if (isFinal) {
+            cropSourceY = img.height - (totalHeight - y);
+            cropHeight = totalHeight - y;
+          }
+
+          ctx.drawImage(
+            img,
+            0,
+            cropSourceY,
+            img.width,
+            cropHeight,
+            0,
+            y,
+            img.width,
+            cropHeight
+          );
+
+          drawnCount++;
+          if (drawnCount === screenshots.length) {
+            resolve(canvas.toDataURL("image/jpeg", 0.9));
+          }
         };
-        img.src = screenshots[index];
-      };
-      stitchImage(0);
+        img.src = dataUrl;
+      });
     });
   } finally {
-    // 5. Restore the page by reloading it, which safely removes all our changes
     await chrome.tabs.reload(tabId);
   }
 }
