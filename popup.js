@@ -43,19 +43,57 @@ async function analyze() {
   typeEl.textContent = type.charAt(0).toUpperCase() + type.slice(1);
   captureBtn.disabled = false;
 
-  captureBtn.onclick = () => {
-    let menhirUrl = `menhir://capture?type=${type}&title=${encodeURIComponent(
-      data.title
-    )}&source=${encodeURIComponent(data.source)}`;
+  captureBtn.onclick = async () => {
+    // If it's a webpage, take a screenshot
+    if (type === "webpage") {
+      const screenshotDataUrl = await chrome.tabs.captureVisibleTab(null, {
+        format: "jpeg",
+        quality: 85,
+      });
 
-    if (data.price) menhirUrl += `&price=${encodeURIComponent(data.price)}`;
-    if (data.currency)
-      menhirUrl += `&currency=${encodeURIComponent(data.currency)}`;
-    if (data.vendor) menhirUrl += `&vendor=${encodeURIComponent(data.vendor)}`; // Add this line
-    if (data.image) menhirUrl += `&image=${encodeURIComponent(data.image)}`;
+      const screenshotId = Date.now().toString();
 
-    window.open(menhirUrl);
-    window.close();
+      // Send the screenshot to the local server in the main app
+      try {
+        await fetch("http://localhost:28080/capture-screenshot", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            screenshotId: screenshotId,
+            data: screenshotDataUrl,
+          }),
+        });
+      } catch (e) {
+        console.error("Failed to send screenshot to Menhir app.", e);
+        titleEl.textContent = "Error: Is the Menhir app running?";
+        return;
+      }
+
+      // Trigger the capture in the main app, referencing the screenshotId
+      const menhirUrl = `menhir://capture?type=webpage&title=${encodeURIComponent(
+        data.title
+      )}&source=${encodeURIComponent(
+        data.source
+      )}&screenshotId=${screenshotId}`;
+
+      window.open(menhirUrl);
+      window.close();
+    } else {
+      // For all other types (product, image), use the old logic
+      let menhirUrl = `menhir://capture?type=${type}&title=${encodeURIComponent(
+        data.title
+      )}&source=${encodeURIComponent(data.source)}`;
+
+      if (data.price) menhirUrl += `&price=${encodeURIComponent(data.price)}`;
+      if (data.currency)
+        menhirUrl += `&currency=${encodeURIComponent(data.currency)}`;
+      if (data.vendor)
+        menhirUrl += `&vendor=${encodeURIComponent(data.vendor)}`;
+      if (data.image) menhirUrl += `&image=${encodeURIComponent(data.image)}`;
+
+      window.open(menhirUrl);
+      window.close();
+    }
   };
 }
 
