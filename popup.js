@@ -12,46 +12,30 @@ async function injectScript(tabId, func, args = []) {
 }
 
 async function captureFullPage(tabId) {
-  // --- Script to find and "un-fix" sticky/fixed elements ---
+  // This script changes fixed/sticky elements to absolute
   const unfixElementsScript = () => {
-    const fixedElements = [];
     document.querySelectorAll("*").forEach((el) => {
       const style = window.getComputedStyle(el);
       if (style.position === "fixed" || style.position === "sticky") {
-        fixedElements.push({
-          element: el,
-          originalPosition: el.style.position,
-        });
         el.style.position = "absolute";
       }
     });
-    // We don't need to return anything, we'll just reset all of them later.
   };
 
-  // --- Script to restore the original positions of the elements ---
-  const refixElementsScript = () => {
-    // This is a bit of a blanket approach, but it's the most reliable way
-    // to catch all elements that might have been changed. We'll search for
-    // them again and restore based on a temporary attribute if needed,
-    // but for now, this simpler version should work for most cases.
-    // A more advanced version would pass selectors back and forth.
-    document.querySelectorAll("*").forEach((el) => {
-      const style = window.getComputedStyle(el);
-      if (style.position === "absolute") {
-        // A simple heuristic to change back only what we likely changed.
-        // This is imperfect but avoids a more complex implementation.
-        // A better implementation would be needed for sites that heavily use absolute positioning.
-      }
-    });
-    // For now, we will rely on the page reload after capture to fix styles.
-    // The below is the ideal implementation, but requires more complex script injection.
-  };
+  // This CSS just hides the scrollbar
+  const hideScrollbarCSS =
+    "body::-webkit-scrollbar { display: none !important; }";
 
   try {
-    // 1. Un-fix elements before we start
+    // 1. Apply our temporary styles
+    await chrome.scripting.insertCSS({
+      target: { tabId },
+      css: hideScrollbarCSS,
+    });
     await injectScript(tabId, unfixElementsScript);
+    await new Promise((resolve) => setTimeout(resolve, 200)); // Wait for styles to apply
 
-    // 2. Get the necessary dimensions from the page
+    // 2. Get page dimensions
     const pageDetails = await injectScript(tabId, () => ({
       totalHeight: document.body.scrollHeight,
       viewportHeight: window.innerHeight,
@@ -62,51 +46,39 @@ async function captureFullPage(tabId) {
     let capturedHeight = 0;
     const screenshots = [];
 
-    // 3. Scroll and capture in a loop
+    // 3. Scroll and capture loop
     while (capturedHeight < totalHeight) {
       await injectScript(tabId, (y) => window.scrollTo(0, y), [capturedHeight]);
       await new Promise((resolve) => setTimeout(resolve, 200));
-
       const dataUrl = await chrome.tabs.captureVisibleTab(null, {
         format: "jpeg",
         quality: 90,
       });
       screenshots.push(dataUrl);
-
       capturedHeight += viewportHeight;
     }
 
-    // 4. Stitch the images together using a canvas
+    // 4. Stitch the images together
     return new Promise((resolve) => {
       const canvas = document.createElement("canvas");
-      // A little extra safety margin on the canvas height
-      canvas.height = totalHeight;
       canvas.width = viewportWidth;
+      canvas.height = totalHeight;
       const ctx = canvas.getContext("2d");
-
       let y = 0;
       const stitchImage = (index) => {
         if (index >= screenshots.length) {
-          // Trim the canvas to the actual captured height to remove any empty space at the bottom
           const finalCanvas = document.createElement("canvas");
           finalCanvas.width = viewportWidth;
-          finalCanvas.height = y;
+          finalCanvas.height = totalHeight;
           const finalCtx = finalCanvas.getContext("2d");
           finalCtx.drawImage(canvas, 0, 0);
-
           resolve(finalCanvas.toDataURL("image/jpeg", 0.9));
           return;
         }
         const img = new Image();
         img.onload = () => {
           ctx.drawImage(img, 0, y);
-          // On the last image, don't use the full viewport height, but the remainder
-          if (index === screenshots.length - 1) {
-            const remainder = totalHeight - y;
-            y += remainder;
-          } else {
-            y += img.height;
-          }
+          y += img.height;
           stitchImage(index + 1);
         };
         img.src = screenshots[index];
@@ -114,8 +86,7 @@ async function captureFullPage(tabId) {
       stitchImage(0);
     });
   } finally {
-    // 5. Restore the page by simply reloading it. This is the safest way to ensure
-    // all styles and states are reset correctly without leaving artifacts.
+    // 5. Restore the page by reloading it, which safely removes all our changes
     await chrome.tabs.reload(tabId);
   }
 }
