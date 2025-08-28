@@ -22,7 +22,6 @@ async function captureFullPage(tabId) {
       }
     });
   };
-
   const hideScrollbarCSS =
     "body::-webkit-scrollbar { display: none !important; }";
 
@@ -34,81 +33,63 @@ async function captureFullPage(tabId) {
     await injectScript(tabId, unfixElementsScript);
     await new Promise((resolve) => setTimeout(resolve, 100));
 
+    // Get page dimensions, now including the device pixel ratio
     const pageDetails = await injectScript(tabId, () => ({
       totalHeight: document.body.scrollHeight,
       viewportHeight: window.innerHeight,
       viewportWidth: window.innerWidth,
+      dpr: window.devicePixelRatio || 1,
     }));
 
-    const { totalHeight, viewportHeight, viewportWidth } = pageDetails;
+    const { totalHeight, viewportHeight, viewportWidth, dpr } = pageDetails;
+    let screenshots = [];
     let capturedHeight = 0;
-    const screenshots = [];
-    let isDone = false;
 
-    while (!isDone) {
-      let nextScrollY = capturedHeight + viewportHeight;
-      if (nextScrollY >= totalHeight) {
-        nextScrollY = totalHeight - viewportHeight;
-        isDone = true;
-      }
+    // The scroll-and-capture loop
+    while (capturedHeight < totalHeight) {
       await injectScript(tabId, (y) => window.scrollTo(0, y), [capturedHeight]);
-      await new Promise((resolve) => setTimeout(resolve, 600));
+      await new Promise((resolve) => setTimeout(resolve, 300));
+
       const dataUrl = await chrome.tabs.captureVisibleTab(null, {
         format: "jpeg",
         quality: 90,
       });
       screenshots.push({ dataUrl, y: capturedHeight });
-      capturedHeight = nextScrollY;
-      if (isDone) {
-        await injectScript(tabId, (y) => window.scrollTo(0, y), [totalHeight]);
-        await new Promise((resolve) => setTimeout(resolve, 100));
-        const finalDataUrl = await chrome.tabs.captureVisibleTab(null, {
-          format: "jpeg",
-          quality: 90,
-        });
-        screenshots.push({
-          dataUrl: finalDataUrl,
-          y: totalHeight - viewportHeight,
-          isFinal: true,
-        });
-      }
+
+      capturedHeight += viewportHeight;
     }
 
+    // Stitch the images together, now aware of the pixel ratio
     return new Promise((resolve) => {
       const canvas = document.createElement("canvas");
-      canvas.width = viewportWidth;
-      canvas.height = totalHeight;
+      // Scale the canvas to match the physical pixel dimensions
+      canvas.width = viewportWidth * dpr;
+      canvas.height = totalHeight * dpr;
       const ctx = canvas.getContext("2d");
-      let drawnCount = 0;
-      screenshots.forEach(({ dataUrl, y, isFinal }) => {
+
+      let loadedImages = 0;
+      screenshots.forEach(({ dataUrl, y }) => {
         const img = new Image();
         img.onload = () => {
-          let cropSourceY = 0;
-          let cropHeight = img.height;
-          if (isFinal) {
-            cropSourceY = img.height - (totalHeight - y);
-            cropHeight = totalHeight - y;
-          }
-          ctx.drawImage(
-            img,
-            0,
-            cropSourceY,
-            img.width,
-            cropHeight,
-            0,
-            y,
-            img.width,
-            cropHeight
-          );
-          drawnCount++;
-          if (drawnCount === screenshots.length) {
-            resolve(canvas.toDataURL("image/jpeg", 0.9));
+          // Draw the image at the correct physical pixel position
+          ctx.drawImage(img, 0, y * dpr);
+          loadedImages++;
+          if (loadedImages === screenshots.length) {
+            // If the final stitched image is taller than the canvas,
+            // we create a new canvas of the correct size to trim the excess.
+            const finalCanvas = document.createElement("canvas");
+            finalCanvas.width = canvas.width;
+            finalCanvas.height = totalHeight * dpr;
+            const finalCtx = finalCanvas.getContext("2d");
+            finalCtx.drawImage(canvas, 0, 0);
+            resolve(finalCanvas.toDataURL("image/jpeg", 0.9));
           }
         };
         img.src = dataUrl;
       });
     });
   } finally {
+    // Restore the page by reloading it
     await chrome.tabs.reload(tabId);
   }
 }
