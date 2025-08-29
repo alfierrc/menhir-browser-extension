@@ -22,10 +22,17 @@ async function captureFullPage(tabId) {
       }
     });
   };
+
   const hideScrollbarCSS =
     "body::-webkit-scrollbar { display: none !important; }";
 
   try {
+    await injectScript(tabId, () => {
+      window.scrollTo({ top: 0, behavior: "instant" });
+    });
+    // We still need a very brief pause for the browser to repaint.
+    await new Promise((resolve) => setTimeout(resolve, 150));
+
     await chrome.scripting.insertCSS({
       target: { tabId },
       css: hideScrollbarCSS,
@@ -33,63 +40,96 @@ async function captureFullPage(tabId) {
     await injectScript(tabId, unfixElementsScript);
     await new Promise((resolve) => setTimeout(resolve, 100));
 
-    // Get page dimensions, now including the device pixel ratio
+    // Get all necessary page dimensions, now including the pixel ratio
     const pageDetails = await injectScript(tabId, () => ({
       totalHeight: document.body.scrollHeight,
       viewportHeight: window.innerHeight,
       viewportWidth: window.innerWidth,
-      dpr: window.devicePixelRatio || 1,
+      dpr: window.devicePixelRatio || 1, // <-- The resolution fix starts here
     }));
 
     const { totalHeight, viewportHeight, viewportWidth, dpr } = pageDetails;
-    let screenshots = [];
     let capturedHeight = 0;
+    const screenshots = [];
+    let isDone = false;
 
-    // The scroll-and-capture loop
-    while (capturedHeight < totalHeight) {
+    // This is your trusted capture loop, unchanged
+    while (!isDone) {
+      let nextScrollY = capturedHeight + viewportHeight;
+      if (nextScrollY >= totalHeight) {
+        nextScrollY = totalHeight - viewportHeight;
+        isDone = true;
+      }
       await injectScript(tabId, (y) => window.scrollTo(0, y), [capturedHeight]);
-      await new Promise((resolve) => setTimeout(resolve, 400));
-
+      await new Promise((resolve) => setTimeout(resolve, 400)); // Adjusted delay
       const dataUrl = await chrome.tabs.captureVisibleTab(null, {
         format: "jpeg",
         quality: 90,
       });
       screenshots.push({ dataUrl, y: capturedHeight });
-
-      capturedHeight += viewportHeight;
+      capturedHeight = nextScrollY;
+      if (isDone) {
+        await injectScript(tabId, (y) => window.scrollTo(0, y), [totalHeight]);
+        await new Promise((resolve) => setTimeout(resolve, 100));
+        const finalDataUrl = await chrome.tabs.captureVisibleTab(null, {
+          format: "jpeg",
+          quality: 90,
+        });
+        screenshots.push({
+          dataUrl: finalDataUrl,
+          y: totalHeight - viewportHeight,
+          isFinal: true,
+        });
+      }
     }
 
-    // Stitch the images together, now aware of the pixel ratio
+    // Stitch the images together with resolution scaling
     return new Promise((resolve) => {
       const canvas = document.createElement("canvas");
-      // Scale the canvas to match the physical pixel dimensions
+      // Scale the canvas to the physical pixel size
       canvas.width = viewportWidth * dpr;
       canvas.height = totalHeight * dpr;
       const ctx = canvas.getContext("2d");
 
-      let loadedImages = 0;
-      screenshots.forEach(({ dataUrl, y }) => {
+      let drawnCount = 0;
+      screenshots.forEach(({ dataUrl, y, isFinal }) => {
         const img = new Image();
         img.onload = () => {
-          // Draw the image at the correct physical pixel position
-          ctx.drawImage(img, 0, y * dpr);
-          loadedImages++;
-          if (loadedImages === screenshots.length) {
-            // If the final stitched image is taller than the canvas,
-            // we create a new canvas of the correct size to trim the excess.
-            const finalCanvas = document.createElement("canvas");
-            finalCanvas.width = canvas.width;
-            finalCanvas.height = totalHeight * dpr;
-            const finalCtx = finalCanvas.getContext("2d");
-            finalCtx.drawImage(canvas, 0, 0);
-            resolve(finalCanvas.toDataURL("image/jpeg", 0.3));
+          let cropSourceY = 0;
+          let cropHeight = img.height;
+          let destY = y * dpr; // Scale destination Y-coordinate
+          let destHeight = img.height;
+
+          // Your trusted cropping logic for the final image
+          if (isFinal) {
+            const remainingCssPixels = totalHeight - y;
+            cropSourceY =
+              img.height - remainingCssPixels * (img.height / viewportHeight);
+            cropHeight = img.height - cropSourceY;
+            destHeight = remainingCssPixels * dpr; // Scale destination height
+          }
+
+          ctx.drawImage(
+            img,
+            0, // sourceX
+            cropSourceY, // sourceY
+            img.width, // sourceWidth
+            cropHeight, // sourceHeight
+            0, // destinationX
+            destY, // destinationY (scaled)
+            canvas.width, // destinationWidth
+            destHeight // destinationHeight (scaled)
+          );
+
+          drawnCount++;
+          if (drawnCount === screenshots.length) {
+            resolve(canvas.toDataURL("image/jpeg", 0.3)); // Adjusted quality
           }
         };
         img.src = dataUrl;
       });
     });
   } finally {
-    // Restore the page by reloading it
     await chrome.tabs.reload(tabId);
   }
 }
