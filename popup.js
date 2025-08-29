@@ -48,7 +48,7 @@ async function captureFullPage(tabId) {
     // The scroll-and-capture loop
     while (capturedHeight < totalHeight) {
       await injectScript(tabId, (y) => window.scrollTo(0, y), [capturedHeight]);
-      await new Promise((resolve) => setTimeout(resolve, 300));
+      await new Promise((resolve) => setTimeout(resolve, 400));
 
       const dataUrl = await chrome.tabs.captureVisibleTab(null, {
         format: "jpeg",
@@ -82,7 +82,7 @@ async function captureFullPage(tabId) {
             finalCanvas.height = totalHeight * dpr;
             const finalCtx = finalCanvas.getContext("2d");
             finalCtx.drawImage(canvas, 0, 0);
-            resolve(finalCanvas.toDataURL("image/jpeg", 0.9));
+            resolve(finalCanvas.toDataURL("image/jpeg", 0.3));
           }
         };
         img.src = dataUrl;
