@@ -70,7 +70,7 @@ async function captureFullPage(tabId) {
       capturedHeight = nextScrollY;
       if (isDone) {
         await injectScript(tabId, (y) => window.scrollTo(0, y), [totalHeight]);
-        await new Promise((resolve) => setTimeout(resolve, 100));
+        await new Promise((resolve) => setTimeout(resolve, 400));
         const finalDataUrl = await chrome.tabs.captureVisibleTab(null, {
           format: "jpeg",
           quality: 90,
