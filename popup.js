@@ -146,7 +146,7 @@ function setupCaptureButton(type, data) {
       currentWindow: true,
     });
 
-    // For products and webpages, we take a screenshot
+    // For webpages, we take a screenshot
     if (type === "webpage") {
       try {
         titleEl.textContent = `Capturing ${type}...`;
@@ -174,12 +174,6 @@ function setupCaptureButton(type, data) {
           data.source
         )}&screenshotId=${screenshotId}`;
 
-        if (data.price) menhirUrl += `&price=${encodeURIComponent(data.price)}`;
-        if (data.currency)
-          menhirUrl += `&currency=${encodeURIComponent(data.currency)}`;
-        if (data.vendor)
-          menhirUrl += `&vendor=${encodeURIComponent(data.vendor)}`;
-
         window.open(menhirUrl);
         window.close();
       } catch (e) {
@@ -188,12 +182,18 @@ function setupCaptureButton(type, data) {
         captureBtn.disabled = false;
       }
     } else {
-      // For direct images, we just pass the URL
+      // For images and products, we just pass the URL
       let menhirUrl = `menhir://capture?type=${type}&title=${encodeURIComponent(
         data.title
       )}&source=${encodeURIComponent(data.source)}&image=${encodeURIComponent(
         data.image
       )}`;
+
+      if (data.price) menhirUrl += `&price=${encodeURIComponent(data.price)}`;
+      if (data.currency)
+        menhirUrl += `&currency=${encodeURIComponent(data.currency)}`;
+      if (data.vendor)
+        menhirUrl += `&vendor=${encodeURIComponent(data.vendor)}`;
 
       window.open(menhirUrl);
       window.close();
