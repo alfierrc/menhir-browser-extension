@@ -146,8 +146,35 @@ function setupCaptureButton(type, data) {
       currentWindow: true,
     });
 
-    // For webpages, we take a screenshot
-    if (type === "webpage") {
+    if (type === "article") {
+      try {
+        titleEl.textContent = "Capturing article...";
+        captureBtn.disabled = true;
+
+        const pageHTML = await injectScript(
+          tab.id,
+          () => document.documentElement.outerHTML
+        );
+        const articleId = Date.now().toString();
+
+        await fetch("http://localhost:28080/capture-article", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ articleId, html: pageHTML }),
+        });
+
+        const menhirUrl = `menhir://capture?type=${type}&title=${encodeURIComponent(
+          data.title
+        )}&source=${encodeURIComponent(data.source)}&articleId=${articleId}`;
+
+        window.open(menhirUrl);
+        window.close();
+      } catch (e) {
+        console.error("Failed to send article to Menhir app.", e);
+        titleEl.textContent = "Error: Is the Menhir app running?";
+        captureBtn.disabled = false;
+      }
+    } else if (type === "webpage") {
       try {
         titleEl.textContent = `Capturing ${type}...`;
         captureBtn.disabled = true;
@@ -220,27 +247,54 @@ async function initialize() {
 
   // --- This is the corrected logic for HTML pages ---
   try {
-    // 1. Ensure the scraper script is injected and ready.
+    // Step 1: Inject Readability.js into the page's MAIN world.
+    await chrome.scripting.executeScript({
+      target: { tabId: tab.id },
+      files: ["lib/Readability.js"],
+      world: "MAIN",
+    });
+
+    // Step 2: Inject a function to run the FULL parse check.
+    const results = await chrome.scripting.executeScript({
+      target: { tabId: tab.id },
+      world: "MAIN",
+      func: () => {
+        // This function now uses the .parse() method which exists in your file.
+        const reader = new window.Readability(document.cloneNode(true));
+        const article = reader.parse();
+        // A page is an "article" if parsing succeeds and the content is long enough.
+        return !!(article && article.textContent.length > 250);
+      },
+    });
+
+    const isArticle = results[0].result;
+    if (isArticle) {
+      // It's an article! Set up the capture button for an article.
+      setupCaptureButton("article", {
+        title: tab.title,
+        source: tab.url,
+      });
+      return; // Stop here.
+    }
+
+    // --- If not an article, proceed with the original scraper logic ---
     await chrome.scripting.executeScript({
       target: { tabId: tab.id },
       files: ["scraper.js"],
     });
 
-    // 2. Send a message to the script, asking it to perform the analysis.
     const response = await chrome.tabs.sendMessage(tab.id, {
       action: "analyzePage",
     });
 
-    // 3. Use the response to set up the capture button.
     if (response) {
       setupCaptureButton(response.type, response.data);
     } else {
       throw new Error("No response from scraper script.");
     }
   } catch (e) {
-    console.error("Error communicating with scraper script:", e);
+    console.error("Error analyzing page:", e);
     titleEl.textContent = "Page could not be analyzed.";
-    // This can happen on special pages like the Chrome Web Store, etc.
   }
 }
 

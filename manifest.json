@@ -5,6 +5,12 @@
   "description": "Captures web content and sends it to the Menhir app.",
   "permissions": ["activeTab", "scripting", "debugger"],
   "host_permissions": ["<all_urls>", "http://localhost:*/"],
+  "web_accessible_resources": [
+    {
+      "resources": [ "lib/Readability.js" ],
+      "matches": [ "<all_urls>" ]
+    }
+  ],
   "action": {
     "default_popup": "popup.html",
     "default_icon": "icon48.png"
