@@ -4,6 +4,92 @@ function analyzePage() {
   let data = {};
   let productFound = false;
 
+  // --- STRATEGY 0: Specialised Scrapers ---
+  // Pinterest
+  if (window.location.href.includes("pinterest.com/pin/")) {
+    // Pinterest uses different selectors, try a few common ones.
+    const pinImage = document.querySelector(
+      'img[data-test-id="pin-image"], img[elementtiming*="MainPinImage"]'
+    );
+
+    if (pinImage) {
+      let bestImageUrl = pinImage.src; // Start with the default src as a fallback.
+
+      // Try to get a higher resolution image from srcset if it exists.
+      if (pinImage.srcset) {
+        const sources = pinImage.srcset.split(",").map((s) => {
+          const parts = s.trim().split(" ");
+          const url = parts[0];
+          const width = parseInt(parts[1]?.replace("w", ""), 10);
+          return { url, width };
+        });
+
+        const largestSource = sources.reduce(
+          (largest, current) => {
+            return current.width > largest.width ? current : largest;
+          },
+          { url: "", width: 0 }
+        );
+
+        if (largestSource.width > 0) {
+          bestImageUrl = largestSource.url;
+        }
+      }
+
+      const data = {
+        title: document.title,
+        image: cleanImageUrl(bestImageUrl),
+        source: window.location.href,
+      };
+      // Important: Return immediately since we've successfully handled this special case.
+      return { type: "image", data };
+    }
+  }
+
+  // Etsy
+  if (window.location.href.includes("etsy.com")) {
+    const etsyJsonLdScript = document.querySelector(
+      'script[type="application/ld+json"]'
+    );
+    if (etsyJsonLdScript) {
+      try {
+        const jsonData = JSON.parse(etsyJsonLdScript.textContent);
+        const product = jsonData["@graph"]
+          ? jsonData["@graph"].find((node) => node["@type"] === "Product")
+          : jsonData;
+
+        if (product && product.offers) {
+          const offer = product.offers;
+          let price = null;
+
+          // Correctly check the @type of the offer object itself
+          if (offer["@type"] === "AggregateOffer") {
+            price = `${offer.lowPrice} - ${offer.highPrice}`;
+          } else if (offer["@type"] === "Offer") {
+            price = offer.price;
+          }
+
+          const data = {
+            title: product.name,
+            image: cleanImageUrl(
+              Array.isArray(product.image)
+                ? product.image[0]?.contentURL
+                : product.image?.url
+            ),
+            vendor: product.brand?.name,
+            price: price,
+            currency: offer.priceCurrency,
+            source: window.location.href,
+          };
+
+          return { type: "product", data };
+        }
+      } catch (e) {
+        /* Ignore parsing errors */
+      }
+    }
+  }
+
   // --- HELPER FUNCTIONS ---
   // Cleans image URLs by removing query parameters
   function cleanImageUrl(url) {
